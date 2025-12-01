@@ -13,6 +13,10 @@ defmodule KarotteControl.DigitalOcean.Client do
     request(:post, path, Keyword.put(opts, :json, body))
   end
 
+  def put(path, body, opts \\ []) do
+    request(:put, path, Keyword.put(opts, :json, body))
+  end
+
   def delete(path, opts \\ []) do
     request(:delete, path, opts)
   end

@@ -12,6 +12,7 @@ defmodule KarotteControlWeb.DigitalOcean.AppNewLive do
       |> assign(:step, 1)
       |> assign(:loading, true)
       |> assign(:creating, false)
+      |> assign(:create_status, nil)
       |> assign(:error, nil)
       # Step 1: Basic info
       |> assign(:app_name, "")
@@ -104,21 +105,36 @@ defmodule KarotteControlWeb.DigitalOcean.AppNewLive do
   end
 
   @impl true
-  def handle_event("update_field", %{"field" => field, "value" => value}, socket) do
+  def handle_event("update_field", params, socket) do
     socket =
-      case field do
-        "app_name" -> assign(socket, :app_name, value)
-        "selected_region" -> assign(socket, :selected_region, value)
-        "http_port" -> assign(socket, :http_port, value)
-        "database_type" -> assign(socket, :database_type, value)
-        "selected_database" -> assign(socket, :selected_database, value)
-        "dev_db_name" -> assign(socket, :dev_db_name, value)
-        "selected_size" -> assign(socket, :selected_size, value)
-        _ -> socket
+      cond do
+        # Handle phx-click style events with field/value
+        Map.has_key?(params, "field") and Map.has_key?(params, "value") ->
+          field = params["field"]
+          value = params["value"]
+
+          case field do
+            "app_name" -> assign(socket, :app_name, value)
+            "selected_region" -> assign(socket, :selected_region, value)
+            "http_port" -> assign(socket, :http_port, value)
+            "database_type" -> assign(socket, :database_type, value)
+            "selected_database" -> assign(socket, :selected_database, value)
+            "selected_size" -> assign(socket, :selected_size, value)
+            _ -> socket
+          end
+
+        # Handle form change events (phx-change on form)
+        true ->
+          socket
+          |> maybe_assign(:database_type, params["database_type"])
+          |> maybe_assign(:selected_database, params["selected_database"])
       end
 
     {:noreply, socket}
   end
+
+  defp maybe_assign(socket, _key, nil), do: socket
+  defp maybe_assign(socket, key, value), do: assign(socket, key, value)
 
   @impl true
   def handle_event("select_repo", %{"repo" => repo_name}, socket) do
@@ -158,27 +174,155 @@ defmodule KarotteControlWeb.DigitalOcean.AppNewLive do
 
   @impl true
   def handle_event("create_app", _params, socket) do
-    socket = assign(socket, :creating, true)
+    socket =
+      socket
+      |> assign(:creating, true)
+      |> assign(:create_status, "Starting...")
 
-    spec = build_app_spec(socket.assigns)
+    send(self(), :do_create_app)
+    {:noreply, socket}
+  end
 
-    case Apps.create(spec) do
-      {:ok, app} ->
-        # Add app to project
-        app_urn = "do:app:#{app["id"]}"
-        Projects.assign_resources(socket.assigns.project_id, [app_urn])
+  @impl true
+  def handle_info(:do_create_app, socket) do
+    if socket.assigns.database_type == "managed" do
+      send(self(), {:create_step, :create_user})
+    else
+      send(self(), {:create_step, :create_app})
+    end
 
-        {:noreply,
-         socket
-         |> put_flash(:info, "App created successfully!")
-         |> push_navigate(to: ~p"/digitalocean/apps/#{app["id"]}")}
+    {:noreply, socket}
+  end
+
+  def handle_info({:create_step, :create_user}, socket) do
+    socket = assign(socket, :create_status, "Creating database user...")
+
+    db = Enum.find(socket.assigns.managed_databases, &(&1["id"] == socket.assigns.selected_database))
+    result = Databases.create_user(db["id"], socket.assigns.app_name)
+
+    user_ok =
+      case result do
+        {:ok, _user} -> true
+        {:error, {409, _}} -> true
+        {:error, {422, _}} -> true
+        _ -> false
+      end
+
+    if user_ok do
+      send(self(), {:create_step, :create_database})
+      {:noreply, socket}
+    else
+      {:noreply,
+       socket
+       |> assign(:creating, false)
+       |> assign(:create_status, nil)
+       |> put_flash(:error, "Failed to create database user: #{inspect(result)}")}
+    end
+  end
+
+  def handle_info({:create_step, :create_database}, socket) do
+    socket = assign(socket, :create_status, "Creating database...")
+
+    db = Enum.find(socket.assigns.managed_databases, &(&1["id"] == socket.assigns.selected_database))
+    db_name = "db-#{socket.assigns.app_name}"
+    result = Databases.create_db(db["id"], db_name)
+
+    db_ok =
+      case result do
+        {:ok, _db} -> true
+        {:error, {409, _}} -> true
+        {:error, {422, _}} -> true
+        _ -> false
+      end
+
+    if db_ok do
+      send(self(), {:create_step, :grant_privileges})
+      {:noreply, socket}
+    else
+      {:noreply,
+       socket
+       |> assign(:creating, false)
+       |> assign(:create_status, nil)
+       |> put_flash(:error, "Failed to create database: #{inspect(result)}")}
+    end
+  end
+
+  def handle_info({:create_step, :grant_privileges}, socket) do
+    socket = assign(socket, :create_status, "Granting database privileges...")
+
+    db = Enum.find(socket.assigns.managed_databases, &(&1["id"] == socket.assigns.selected_database))
+    db_name = "db-#{socket.assigns.app_name}"
+    username = socket.assigns.app_name
+
+    # Fetch full cluster details including connection info
+    case Databases.get(db["id"]) do
+      {:ok, cluster} ->
+        case Databases.grant_privileges(cluster, db_name, username) do
+          :ok ->
+            send(self(), {:create_step, :create_app})
+            {:noreply, socket}
+
+          {:error, error} ->
+            {:noreply,
+             socket
+             |> assign(:creating, false)
+             |> assign(:create_status, nil)
+             |> put_flash(:error, "Failed to grant privileges: #{inspect(error)}")}
+        end
 
       {:error, reason} ->
         {:noreply,
          socket
          |> assign(:creating, false)
+         |> assign(:create_status, nil)
+         |> put_flash(:error, "Failed to fetch database details: #{inspect(reason)}")}
+    end
+  end
+
+  def handle_info({:create_step, :create_app}, socket) do
+    socket = assign(socket, :create_status, "Creating app on DigitalOcean...")
+
+    spec = build_app_spec(socket.assigns)
+
+    case Apps.create(spec) do
+      {:ok, app} ->
+        if socket.assigns.database_type == "managed" do
+          send(self(), {:create_step, :add_trusted_source, app})
+        else
+          send(self(), {:create_step, :assign_to_project, app})
+        end
+
+        {:noreply, socket}
+
+      {:error, reason} ->
+        {:noreply,
+         socket
+         |> assign(:creating, false)
+         |> assign(:create_status, nil)
          |> put_flash(:error, "Failed to create app: #{inspect(reason)}")}
     end
+  end
+
+  def handle_info({:create_step, :add_trusted_source, app}, socket) do
+    socket = assign(socket, :create_status, "Adding app to database trusted sources...")
+
+    db = Enum.find(socket.assigns.managed_databases, &(&1["id"] == socket.assigns.selected_database))
+    Databases.add_app_to_trusted_sources(db["id"], app["id"])
+
+    send(self(), {:create_step, :assign_to_project, app})
+    {:noreply, socket}
+  end
+
+  def handle_info({:create_step, :assign_to_project, app}, socket) do
+    socket = assign(socket, :create_status, "Adding app to project...")
+
+    app_urn = "do:app:#{app["id"]}"
+    Projects.assign_resources(socket.assigns.project_id, [app_urn])
+
+    {:noreply,
+     socket
+     |> put_flash(:info, "App created successfully!")
+     |> push_navigate(to: ~p"/digitalocean/apps/#{app["id"]}")}
   end
 
   defp validate_step(socket, step) do
@@ -209,10 +353,7 @@ defmodule KarotteControlWeb.DigitalOcean.AppNewLive do
 
       3 ->
         case socket.assigns.database_type do
-          "dev" when socket.assigns.dev_db_name == "" ->
-            {:error, "Please enter a name for the dev database"}
-
-          "managed" when is_nil(socket.assigns.selected_database) ->
+          "managed" when socket.assigns.selected_database in [nil, ""] ->
             {:error, "Please select a managed database"}
 
           _ ->
@@ -226,49 +367,94 @@ defmodule KarotteControlWeb.DigitalOcean.AppNewLive do
 
   defp build_app_spec(assigns) do
     registry_name = assigns.registry["name"]
+    db_ref_name = "db-#{assigns.app_name}"
+
+    # Generate a secret key base
+    secret_key_base = :crypto.strong_rand_bytes(64) |> Base.encode64() |> binary_part(0, 64)
+
+    # App-level envs - available to all components (services, jobs, workers)
+    app_envs = [
+      %{
+        "key" => "SECRET_KEY_BASE",
+        "scope" => "RUN_TIME",
+        "type" => "SECRET",
+        "value" => secret_key_base
+      }
+    ]
+
+    # Add DATABASE_URL at app level if using managed database
+    app_envs =
+      if assigns.database_type == "managed" do
+        app_envs ++
+          [
+            %{
+              "key" => "DATABASE_URL",
+              "scope" => "RUN_TIME",
+              "value" => "${#{db_ref_name}.DATABASE_URL}"
+            }
+          ]
+      else
+        app_envs
+      end
+
+    # Base service config
+    service = %{
+      "name" => assigns.app_name,
+      "image" => %{
+        "registry_type" => "DOCR",
+        "repository" => assigns.selected_repo,
+        "tag" => assigns.selected_tag,
+        "registry" => registry_name,
+        "deploy_on_push" => %{"enabled" => true}
+      },
+      "instance_size_slug" => assigns.selected_size,
+      "instance_count" => 1,
+      "http_port" => String.to_integer(assigns.http_port)
+    }
 
     spec = %{
       "name" => assigns.app_name,
       "region" => assigns.selected_region,
-      "services" => [
-        %{
-          "name" => assigns.app_name,
-          "image" => %{
-            "registry_type" => "DOCR",
-            "repository" => assigns.selected_repo,
-            "tag" => assigns.selected_tag,
-            "registry" => registry_name
-          },
-          "instance_size_slug" => assigns.selected_size,
-          "instance_count" => 1,
-          "http_port" => String.to_integer(assigns.http_port)
-        }
-      ]
+      "envs" => app_envs,
+      "services" => [service]
     }
 
-    # Add database if selected
+    # Add database and migration job if selected
     case assigns.database_type do
-      "dev" ->
-        db_spec = %{
-          "name" => assigns.dev_db_name,
-          "engine" => "PG",
-          "production" => false
-        }
-
-        Map.put(spec, "databases", [db_spec])
-
       "managed" ->
         db = Enum.find(assigns.managed_databases, &(&1["id"] == assigns.selected_database))
 
         if db do
+          # Use db-{app_name} for the database name to avoid conflicts with service name
+          # User keeps the app_name
           db_spec = %{
-            "name" => db["name"],
+            "name" => db_ref_name,
             "cluster_name" => db["name"],
+            "db_name" => db_ref_name,
+            "db_user" => assigns.app_name,
             "engine" => String.upcase(db["engine"]),
             "production" => true
           }
 
-          Map.put(spec, "databases", [db_spec])
+          # Migration job that runs after deploy
+          migrate_job = %{
+            "name" => "migrate",
+            "kind" => "POST_DEPLOY",
+            "image" => %{
+              "registry_type" => "DOCR",
+              "repository" => assigns.selected_repo,
+              "tag" => assigns.selected_tag,
+              "registry" => registry_name,
+              "deploy_on_push" => %{"enabled" => true}
+            },
+            "instance_size_slug" => "apps-s-1vcpu-0.5gb",
+            "instance_count" => 1,
+            "run_command" => "./bin/migrate"
+          }
+
+          spec
+          |> Map.put("databases", [db_spec])
+          |> Map.put("jobs", [migrate_job])
         else
           spec
         end
@@ -300,6 +486,9 @@ defmodule KarotteControlWeb.DigitalOcean.AppNewLive do
             <span>{@error}</span>
           </div>
         <% else %>
+          <.flash kind={:info} flash={@flash} />
+          <.flash kind={:error} flash={@flash} />
+
           <!-- Progress steps -->
           <ul class="steps w-full mb-8">
             <li class={if @step >= 1, do: "step step-primary", else: "step"}>Basic Info</li>
@@ -365,14 +554,19 @@ defmodule KarotteControlWeb.DigitalOcean.AppNewLive do
                     Next <.icon name="hero-arrow-right" class="h-4 w-4" />
                   </button>
                 <% else %>
-                  <button phx-click="create_app" class="btn btn-success" disabled={@creating}>
-                    <%= if @creating do %>
-                      <span class="loading loading-spinner loading-sm"></span>
-                      Creating...
-                    <% else %>
-                      <.icon name="hero-rocket-launch" class="h-4 w-4" /> Create App
+                  <div class="flex items-center gap-4">
+                    <%= if @create_status do %>
+                      <span class="text-sm text-base-content/60">{@create_status}</span>
                     <% end %>
-                  </button>
+                    <button phx-click="create_app" class="btn btn-success" disabled={@creating}>
+                      <%= if @creating do %>
+                        <span class="loading loading-spinner loading-sm"></span>
+                        Creating...
+                      <% else %>
+                        <.icon name="hero-rocket-launch" class="h-4 w-4" /> Create App
+                      <% end %>
+                    </button>
+                  </div>
                 <% end %>
               </div>
             </div>
@@ -397,8 +591,7 @@ defmodule KarotteControlWeb.DigitalOcean.AppNewLive do
           placeholder="my-app"
           class="input input-bordered w-full"
           value={@app_name}
-          phx-blur="update_field"
-          phx-value-field="app_name"
+          name="value"
           phx-keyup="update_field"
           phx-value-field="app_name"
         />
@@ -503,7 +696,7 @@ defmodule KarotteControlWeb.DigitalOcean.AppNewLive do
 
   defp step_database(assigns) do
     ~H"""
-    <div class="space-y-4">
+    <form phx-change="update_field" class="space-y-4">
       <h2 class="card-title">Database Configuration</h2>
 
       <div class="form-control">
@@ -524,45 +717,6 @@ defmodule KarotteControlWeb.DigitalOcean.AppNewLive do
           </div>
         </label>
       </div>
-
-      <div class="form-control">
-        <label class="label cursor-pointer justify-start gap-4">
-          <input
-            type="radio"
-            name="database_type"
-            class="radio radio-primary"
-            value="dev"
-            checked={@database_type == "dev"}
-            phx-click="update_field"
-            phx-value-field="database_type"
-            phx-value-value="dev"
-          />
-          <div>
-            <span class="label-text font-medium">Dev Database</span>
-            <p class="text-sm text-base-content/60">
-              Free development PostgreSQL database (not for production)
-            </p>
-          </div>
-        </label>
-      </div>
-
-      <%= if @database_type == "dev" do %>
-        <div class="ml-10 form-control w-full max-w-md">
-          <label class="label">
-            <span class="label-text">Database Name</span>
-          </label>
-          <input
-            type="text"
-            placeholder="dev-db"
-            class="input input-bordered w-full"
-            value={@dev_db_name}
-            phx-blur="update_field"
-            phx-value-field="dev_db_name"
-            phx-keyup="update_field"
-            phx-value-field="dev_db_name"
-          />
-        </div>
-      <% end %>
 
       <div class="form-control">
         <label class="label cursor-pointer justify-start gap-4">
@@ -594,8 +748,7 @@ defmodule KarotteControlWeb.DigitalOcean.AppNewLive do
             <select
               class="select select-bordered w-full"
               phx-change="update_field"
-              phx-value-field="selected_database"
-              name="value"
+              name="selected_database"
             >
               <option value="">Select a database...</option>
               <%= for db <- @managed_databases do %>
@@ -607,7 +760,7 @@ defmodule KarotteControlWeb.DigitalOcean.AppNewLive do
           <% end %>
         </div>
       <% end %>
-    </div>
+    </form>
     """
   end
 
@@ -650,16 +803,11 @@ defmodule KarotteControlWeb.DigitalOcean.AppNewLive do
             <tr>
               <th>Database</th>
               <td>
-                <%= case @database_type do %>
-                  <% "none" -> %>
-                    <span class="text-base-content/60">None</span>
-                  <% "dev" -> %>
-                    <span class="badge badge-info">Dev</span> {@dev_db_name}
-                  <% "managed" -> %>
-                    <%= if @selected_db do %>
-                      <span class="badge badge-success">Managed</span>
-                      {@selected_db["name"]} ({@selected_db["engine"]})
-                    <% end %>
+                <%= if @database_type == "managed" and @selected_db do %>
+                  <span class="badge badge-success">Managed</span>
+                  {@selected_db["name"]} ({@selected_db["engine"]})
+                <% else %>
+                  <span class="text-base-content/60">None</span>
                 <% end %>
               </td>
             </tr>
