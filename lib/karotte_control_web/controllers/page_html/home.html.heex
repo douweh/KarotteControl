@@ -1,0 +1,55 @@
+<Layouts.flash_group flash={@flash} />
+
+<div class="min-h-[80vh] flex flex-col items-center justify-center">
+  <div class="text-center max-w-2xl mx-auto">
+    <div class="flex justify-center mb-8">
+      <img src={~p"/images/logo.png"} alt="Karotte" class="h-32 w-32 drop-shadow-lg" />
+    </div>
+
+    <h1 class="text-5xl font-bold text-primary mb-4">Karotte</h1>
+    <p class="text-xl text-base-content/70 mb-2">Your DigitalOcean Control Panel</p>
+    <p class="text-base-content/50 mb-12">
+      Manage your apps, databases, and container registry with ease.
+    </p>
+
+    <%= if @current_scope do %>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-lg mx-auto">
+        <.link
+          navigate={~p"/digitalocean/registry"}
+          class="card bg-base-200 hover:bg-base-300 transition-all hover:scale-105 cursor-pointer"
+        >
+          <div class="card-body items-center text-center">
+            <.icon name="hero-cube" class="h-10 w-10 text-primary mb-2" />
+            <h2 class="card-title text-lg">Registry</h2>
+            <p class="text-sm text-base-content/60">Container registry management</p>
+          </div>
+        </.link>
+
+        <.link
+          navigate={~p"/users/settings"}
+          class="card bg-base-200 hover:bg-base-300 transition-all hover:scale-105 cursor-pointer"
+        >
+          <div class="card-body items-center text-center">
+            <.icon name="hero-cog-6-tooth" class="h-10 w-10 text-primary mb-2" />
+            <h2 class="card-title text-lg">Settings</h2>
+            <p class="text-sm text-base-content/60">Manage your account</p>
+          </div>
+        </.link>
+      </div>
+      <p class="text-base-content/50 mt-8">
+        Select a project from the DigitalOcean menu to view its resources.
+      </p>
+    <% else %>
+      <div class="flex flex-col sm:flex-row justify-center gap-4">
+        <.link navigate={~p"/users/log-in"} class="btn btn-primary btn-lg gap-2">
+          <.icon name="hero-arrow-right-on-rectangle" class="h-5 w-5" />
+          Log in
+        </.link>
+        <.link navigate={~p"/users/register"} class="btn btn-outline btn-lg gap-2">
+          <.icon name="hero-user-plus" class="h-5 w-5" />
+          Register
+        </.link>
+      </div>
+    <% end %>
+  </div>
+</div>

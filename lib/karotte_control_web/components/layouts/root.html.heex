@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="csrf-token" content={get_csrf_token()} />
+    <.live_title default="Karotte">
+      {assigns[:page_title]}
+    </.live_title>
+    <link phx-track-static rel="stylesheet" href={~p"/assets/css/app.css"} />
+    <script defer phx-track-static type="text/javascript" src={~p"/assets/js/app.js"}>
+    </script>
+  </head>
+  <body>
+    <div class="navbar bg-base-200 px-4 sm:px-6 lg:px-8 border-b-2 border-primary/20">
+      <div class="navbar-start">
+        <.link href={~p"/"} class="btn btn-ghost gap-2 text-xl font-bold">
+          <img src={~p"/images/logo.png"} alt="Karotte" class="h-8 w-8" />
+          <span class="text-primary">Karotte</span>
+        </.link>
+        <%= if @current_scope && @current_scope.user do %>
+          <ul class="menu menu-horizontal px-1 hidden sm:flex">
+            <li>
+              <details>
+                <summary>DigitalOcean</summary>
+                <ul class="bg-base-200 rounded-t-none p-2 z-50 w-52">
+                  <%= if assigns[:projects] do %>
+                    <%= for project <- @projects do %>
+                      <li>
+                        <.link href={~p"/digitalocean/projects/#{project["id"]}"}>
+                          <.icon name="hero-folder" class="h-4 w-4" />
+                          {project["name"]}
+                        </.link>
+                      </li>
+                    <% end %>
+                    <li class="border-t border-base-300 mt-2 pt-2">
+                      <.link href={~p"/digitalocean/registry"}>
+                        <.icon name="hero-cube" class="h-4 w-4" />
+                        Registry
+                      </.link>
+                    </li>
+                  <% else %>
+                    <li><.link href={~p"/digitalocean/registry"}>Registry</.link></li>
+                  <% end %>
+                </ul>
+              </details>
+            </li>
+          </ul>
+        <% end %>
+      </div>
+      <div class="navbar-end">
+        <ul class="menu menu-horizontal px-1">
+          <%= if @current_scope do %>
+            <li>
+              <span class="text-sm">{@current_scope.user.email}</span>
+            </li>
+            <li>
+              <.link href={~p"/users/settings"}>Settings</.link>
+            </li>
+            <li>
+              <.link href={~p"/users/log-out"} method="delete">Log out</.link>
+            </li>
+          <% else %>
+            <li>
+              <.link href={~p"/users/register"}>Register</.link>
+            </li>
+            <li>
+              <.link href={~p"/users/log-in"}>Log in</.link>
+            </li>
+          <% end %>
+        </ul>
+      </div>
+    </div>
+    <main class="p-6 sm:p-8 lg:p-10">
+      <div class="mx-auto max-w-7xl">
+        {@inner_content}
+      </div>
+    </main>
+  </body>
+</html>
