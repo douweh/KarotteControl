@@ -27,4 +27,36 @@ defmodule KarotteControl.DigitalOcean.Apps do
       error -> error
     end
   end
+
+  @doc """
+  Creates a new app with the given spec.
+  """
+  def create(spec) do
+    case Client.post("/apps", %{"spec" => spec}) do
+      {:ok, %{"app" => app}} -> {:ok, app}
+      error -> error
+    end
+  end
+
+  @doc """
+  Lists available instance sizes for App Platform.
+  """
+  def list_instance_sizes do
+    case Client.get("/apps/tiers/instance_sizes") do
+      {:ok, %{"instance_sizes" => sizes}} -> {:ok, sizes}
+      {:ok, %{}} -> {:ok, []}
+      error -> error
+    end
+  end
+
+  @doc """
+  Lists available regions for App Platform.
+  """
+  def list_regions do
+    case Client.get("/apps/regions") do
+      {:ok, %{"regions" => regions}} -> {:ok, regions}
+      {:ok, %{}} -> {:ok, []}
+      error -> error
+    end
+  end
 end

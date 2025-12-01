@@ -12,6 +12,7 @@ defmodule KarotteControlWeb.DigitalOcean.ProjectShowLive do
       |> assign(:resources, [])
       |> assign(:apps, [])
       |> assign(:databases, [])
+      |> assign(:dev_databases, [])
       |> assign(:loading, true)
       |> assign(:error, nil)
 
@@ -31,12 +32,16 @@ defmodule KarotteControlWeb.DigitalOcean.ProjectShowLive do
            {:ok, resources} <- Projects.list_resources(project_id),
            {:ok, apps} <- load_apps(resources),
            {:ok, databases} <- load_databases(resources) do
+        # Extract dev databases from app specs
+        dev_databases = extract_dev_databases(apps)
+
         socket
         |> assign(:page_title, project["name"])
         |> assign(:project, project)
         |> assign(:resources, resources)
         |> assign(:apps, apps)
         |> assign(:databases, databases)
+        |> assign(:dev_databases, dev_databases)
         |> assign(:loading, false)
       else
         {:error, reason} ->
@@ -46,6 +51,29 @@ defmodule KarotteControlWeb.DigitalOcean.ProjectShowLive do
       end
 
     {:noreply, socket}
+  end
+
+  defp extract_dev_databases(apps) do
+    apps
+    |> Enum.flat_map(fn app ->
+      app_name = get_in(app, ["spec", "name"])
+      databases = get_in(app, ["spec", "databases"]) || []
+
+      # Only include dev databases (those without a cluster_name, which means
+      # they're App Platform dev databases, not references to managed databases)
+      databases
+      |> Enum.filter(fn db -> is_nil(db["cluster_name"]) end)
+      |> Enum.map(fn db ->
+        %{
+          "name" => db["name"],
+          "engine" => db["engine"],
+          "version" => db["version"],
+          "app_name" => app_name,
+          "app_id" => app["id"],
+          "type" => "dev"
+        }
+      end)
+    end)
   end
 
   defp load_apps(resources) do
@@ -107,9 +135,14 @@ defmodule KarotteControlWeb.DigitalOcean.ProjectShowLive do
             <h1 class="text-2xl font-bold">{@project["name"]}</h1>
             <p class="text-base-content/60">{@project["description"]}</p>
           </div>
-          <button phx-click="refresh" class="btn btn-primary btn-sm">
-            <.icon name="hero-arrow-path" class="h-4 w-4 mr-1" /> Refresh
-          </button>
+          <div class="flex gap-2">
+            <.link navigate={~p"/digitalocean/projects/#{@project_id}/apps/new"} class="btn btn-success btn-sm">
+              <.icon name="hero-plus" class="h-4 w-4 mr-1" /> Create App
+            </.link>
+            <button phx-click="refresh" class="btn btn-primary btn-sm">
+              <.icon name="hero-arrow-path" class="h-4 w-4 mr-1" /> Refresh
+            </button>
+          </div>
         </div>
 
         <div class="grid gap-6 lg:grid-cols-2">
@@ -135,14 +168,17 @@ defmodule KarotteControlWeb.DigitalOcean.ProjectShowLive do
             <div class="card-body">
               <h2 class="card-title">
                 <.icon name="hero-circle-stack" class="h-5 w-5" />
-                Databases ({length(@databases)})
+                Databases ({length(@databases) + length(@dev_databases)})
               </h2>
-              <%= if @databases == [] do %>
+              <%= if @databases == [] and @dev_databases == [] do %>
                 <p class="text-base-content/60">No databases in this project</p>
               <% else %>
                 <div class="space-y-3">
                   <%= for db <- @databases do %>
                     <.database_item db={db} />
+                  <% end %>
+                  <%= for db <- @dev_databases do %>
+                    <.dev_database_item db={db} />
                   <% end %>
                 </div>
               <% end %>
@@ -201,6 +237,25 @@ defmodule KarotteControlWeb.DigitalOcean.ProjectShowLive do
         </div>
       </div>
       <.link navigate={~p"/digitalocean/databases/#{@db["id"]}"} class="btn btn-sm btn-ghost">
+        <.icon name="hero-arrow-right" class="h-4 w-4" />
+      </.link>
+    </div>
+    """
+  end
+
+  defp dev_database_item(assigns) do
+    ~H"""
+    <div class="flex items-center justify-between p-3 bg-base-200 rounded-lg">
+      <div>
+        <div class="font-medium">
+          {@db["name"]}
+          <span class="badge badge-info badge-xs ml-2">dev</span>
+        </div>
+        <div class="text-sm text-base-content/60">
+          {@db["engine"]} {@db["version"]} · via {@db["app_name"]}
+        </div>
+      </div>
+      <.link navigate={~p"/digitalocean/apps/#{@db["app_id"]}"} class="btn btn-sm btn-ghost">
         <.icon name="hero-arrow-right" class="h-4 w-4" />
       </.link>
     </div>

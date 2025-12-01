@@ -67,6 +67,7 @@ defmodule KarotteControlWeb.Router do
 
     # DigitalOcean routes
     live "/digitalocean/projects/:project_id", DigitalOcean.ProjectShowLive, :show
+    live "/digitalocean/projects/:project_id/apps/new", DigitalOcean.AppNewLive, :new
     live "/digitalocean/apps/:id", DigitalOcean.AppShowLive, :show
     live "/digitalocean/databases/:id", DigitalOcean.DatabaseShowLive, :show
     live "/digitalocean/registry", DigitalOcean.RegistryLive, :index

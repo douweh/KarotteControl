@@ -46,4 +46,13 @@ defmodule KarotteControl.DigitalOcean.Projects do
     |> String.split(":")
     |> List.last()
   end
+
+  @doc """
+  Assigns resources to a project by their URNs.
+  """
+  def assign_resources(project_id, urns) when is_list(urns) do
+    resources = Enum.map(urns, fn urn -> %{"urn" => urn} end)
+
+    Client.post("/projects/#{project_id}/resources", %{"resources" => resources})
+  end
 end
