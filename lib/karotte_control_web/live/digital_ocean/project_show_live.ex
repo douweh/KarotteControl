@@ -20,6 +20,7 @@ defmodule KarotteControlWeb.DigitalOcean.ProjectShowLive do
       |> assign(:show_ssh_modal, false)
       |> assign(:ssh_modal_droplet, nil)
       |> assign(:ssh_key_input, "")
+      |> assign(:ssh_port_input, "443")
       |> assign(:generated_public_key, nil)
       |> assign(:generating_key, false)
 
@@ -274,6 +275,7 @@ defmodule KarotteControlWeb.DigitalOcean.ProjectShowLive do
         :if={@show_ssh_modal}
         droplet={@ssh_modal_droplet}
         ssh_key_input={@ssh_key_input}
+        ssh_port_input={@ssh_port_input}
         generated_public_key={@generated_public_key}
         generating_key={@generating_key}
       />
@@ -474,10 +476,35 @@ defmodule KarotteControlWeb.DigitalOcean.ProjectShowLive do
               </div>
             </div>
 
-            <form phx-submit="save_ssh_key">
+            <div class="bg-base-200 p-4 rounded-lg space-y-3">
+              <h4 class="font-semibold">Step 4: Enable SSH on port 443 (required for App Platform)</h4>
+              <p class="text-sm text-base-content/70">Port 22 is blocked. Add port 443 to SSH config:</p>
+              <div class="mockup-code text-xs">
+                <pre><code>echo "Port 443" | sudo tee -a /etc/ssh/sshd_config && sudo systemctl restart ssh</code></pre>
+              </div>
+            </div>
+
+            <form phx-submit="save_ssh_key" phx-change="update_ssh_key_input">
               <input type="hidden" name="droplet_id" value={@droplet["id"]} />
               <input type="hidden" name="droplet_name" value={@droplet["name"]} />
               <input type="hidden" name="ssh_key" value={@ssh_key_input} />
+
+              <div class="form-control mt-4">
+                <label class="label">
+                  <span class="label-text">SSH Port</span>
+                </label>
+                <input
+                  type="number"
+                  name="ssh_port"
+                  value={@ssh_port_input}
+                  class="input input-bordered w-32"
+                  min="1"
+                  max="65535"
+                />
+                <label class="label">
+                  <span class="label-text-alt">Port 22 is blocked on App Platform. Use 443 or another port.</span>
+                </label>
+              </div>
 
               <div class="modal-action">
                 <button type="button" class="btn" phx-click="close_ssh_modal">Cancel</button>
@@ -524,6 +551,23 @@ defmodule KarotteControlWeb.DigitalOcean.ProjectShowLive do
                 >{@ssh_key_input}</textarea>
                 <label class="label">
                   <span class="label-text-alt">Paste a private key that already has access to this droplet</span>
+                </label>
+              </div>
+
+              <div class="form-control">
+                <label class="label">
+                  <span class="label-text">SSH Port</span>
+                </label>
+                <input
+                  type="number"
+                  name="ssh_port"
+                  value={@ssh_port_input}
+                  class="input input-bordered w-32"
+                  min="1"
+                  max="65535"
+                />
+                <label class="label">
+                  <span class="label-text-alt">Port 22 is blocked on App Platform. Use 443 or another port.</span>
                 </label>
               </div>
 
@@ -615,6 +659,7 @@ defmodule KarotteControlWeb.DigitalOcean.ProjectShowLive do
      |> assign(:show_ssh_modal, true)
      |> assign(:ssh_modal_droplet, droplet)
      |> assign(:ssh_key_input, "")
+     |> assign(:ssh_port_input, "443")
      |> assign(:generated_public_key, nil)
      |> assign(:generating_key, false)}
   end
@@ -625,6 +670,7 @@ defmodule KarotteControlWeb.DigitalOcean.ProjectShowLive do
      |> assign(:show_ssh_modal, false)
      |> assign(:ssh_modal_droplet, nil)
      |> assign(:ssh_key_input, "")
+     |> assign(:ssh_port_input, "443")
      |> assign(:generated_public_key, nil)
      |> assign(:generating_key, false)}
   end
@@ -648,15 +694,26 @@ defmodule KarotteControlWeb.DigitalOcean.ProjectShowLive do
     end
   end
 
-  def handle_event("update_ssh_key_input", %{"ssh_key" => ssh_key}, socket) do
-    {:noreply, assign(socket, :ssh_key_input, ssh_key)}
+  def handle_event("update_ssh_key_input", params, socket) do
+    socket =
+      socket
+      |> maybe_assign(:ssh_key_input, params["ssh_key"])
+      |> maybe_assign(:ssh_port_input, params["ssh_port"])
+
+    {:noreply, socket}
   end
 
-  def handle_event("save_ssh_key", %{"droplet_id" => droplet_id, "droplet_name" => droplet_name, "ssh_key" => ssh_key}, socket) do
+  defp maybe_assign(socket, _key, nil), do: socket
+  defp maybe_assign(socket, key, value), do: assign(socket, key, value)
+
+  def handle_event("save_ssh_key", %{"droplet_id" => droplet_id, "droplet_name" => droplet_name, "ssh_key" => ssh_key} = params, socket) do
+    ssh_port = params["ssh_port"] || socket.assigns.ssh_port_input || "443"
+
     case Credentials.upsert(%{
       droplet_id: droplet_id,
       droplet_name: droplet_name,
-      ssh_private_key: ssh_key
+      ssh_private_key: ssh_key,
+      ssh_port: String.to_integer(ssh_port)
     }) do
       {:ok, _credential} ->
         # Update the droplet to show it has credentials and trigger app loading
