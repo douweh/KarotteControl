@@ -30,7 +30,12 @@ defmodule KarotteControlWeb.DigitalOcean.AppNewLive do
       |> assign(:managed_databases, [])
       |> assign(:selected_database, nil)
       |> assign(:dev_db_name, "")
-      # Step 4: Instance size
+      # Step 4: Environment variables
+      |> assign(:env_vars, [])
+      |> assign(:new_env_key, "")
+      |> assign(:new_env_value, "")
+      |> assign(:new_env_type, "GENERAL")
+      # Step 5: Instance size
       |> assign(:instance_sizes, [])
       |> assign(:selected_size, "apps-s-1vcpu-0.5gb")
 
@@ -135,6 +140,44 @@ defmodule KarotteControlWeb.DigitalOcean.AppNewLive do
 
   defp maybe_assign(socket, _key, nil), do: socket
   defp maybe_assign(socket, key, value), do: assign(socket, key, value)
+
+  @impl true
+  def handle_event("update_new_env", params, socket) do
+    socket =
+      socket
+      |> maybe_assign(:new_env_key, params["key"])
+      |> maybe_assign(:new_env_value, params["value"])
+      |> maybe_assign(:new_env_type, params["type"])
+
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_event("add_env_var", _params, socket) do
+    key = String.trim(socket.assigns.new_env_key)
+    value = socket.assigns.new_env_value
+    type = socket.assigns.new_env_type
+
+    if key != "" do
+      new_env = %{"key" => key, "value" => value, "type" => type, "scope" => "RUN_AND_BUILD_TIME"}
+      env_vars = socket.assigns.env_vars ++ [new_env]
+
+      {:noreply,
+       socket
+       |> assign(:env_vars, env_vars)
+       |> assign(:new_env_key, "")
+       |> assign(:new_env_value, "")
+       |> assign(:new_env_type, "GENERAL")}
+    else
+      {:noreply, put_flash(socket, :error, "Environment variable key is required")}
+    end
+  end
+
+  @impl true
+  def handle_event("remove_env_var", %{"key" => key}, socket) do
+    env_vars = Enum.reject(socket.assigns.env_vars, &(&1["key"] == key))
+    {:noreply, assign(socket, :env_vars, env_vars)}
+  end
 
   @impl true
   def handle_event("select_repo", %{"repo" => repo_name}, socket) do
@@ -397,6 +440,9 @@ defmodule KarotteControlWeb.DigitalOcean.AppNewLive do
         app_envs
       end
 
+    # Add user-provided env vars
+    app_envs = app_envs ++ assigns.env_vars
+
     # Base service config
     service = %{
       "name" => assigns.app_name,
@@ -494,7 +540,8 @@ defmodule KarotteControlWeb.DigitalOcean.AppNewLive do
             <li class={if @step >= 1, do: "step step-primary", else: "step"}>Basic Info</li>
             <li class={if @step >= 2, do: "step step-primary", else: "step"}>Container</li>
             <li class={if @step >= 3, do: "step step-primary", else: "step"}>Database</li>
-            <li class={if @step >= 4, do: "step step-primary", else: "step"}>Review</li>
+            <li class={if @step >= 4, do: "step step-primary", else: "step"}>Env Vars</li>
+            <li class={if @step >= 5, do: "step step-primary", else: "step"}>Review</li>
           </ul>
 
           <div class="card bg-base-100 shadow-md">
@@ -523,6 +570,13 @@ defmodule KarotteControlWeb.DigitalOcean.AppNewLive do
                     dev_db_name={@dev_db_name}
                   />
                 <% 4 -> %>
+                  <.step_env_vars
+                    env_vars={@env_vars}
+                    new_env_key={@new_env_key}
+                    new_env_value={@new_env_value}
+                    new_env_type={@new_env_type}
+                  />
+                <% 5 -> %>
                   <.step_review
                     app_name={@app_name}
                     selected_region={@selected_region}
@@ -536,6 +590,7 @@ defmodule KarotteControlWeb.DigitalOcean.AppNewLive do
                     selected_database={@selected_database}
                     instance_sizes={@instance_sizes}
                     selected_size={@selected_size}
+                    env_vars={@env_vars}
                     creating={@creating}
                   />
               <% end %>
@@ -549,7 +604,7 @@ defmodule KarotteControlWeb.DigitalOcean.AppNewLive do
                   <div></div>
                 <% end %>
 
-                <%= if @step < 4 do %>
+                <%= if @step < 5 do %>
                   <button phx-click="next_step" class="btn btn-primary">
                     Next <.icon name="hero-arrow-right" class="h-4 w-4" />
                   </button>
@@ -764,6 +819,99 @@ defmodule KarotteControlWeb.DigitalOcean.AppNewLive do
     """
   end
 
+  defp step_env_vars(assigns) do
+    ~H"""
+    <div class="space-y-4">
+      <h2 class="card-title">Environment Variables</h2>
+      <p class="text-base-content/60">
+        Add custom environment variables for your app. SECRET_KEY_BASE and DATABASE_URL (if using a database) are added automatically.
+      </p>
+
+      <%= if @env_vars != [] do %>
+        <div class="overflow-x-auto">
+          <table class="table table-sm">
+            <thead>
+              <tr>
+                <th>Key</th>
+                <th>Value</th>
+                <th>Type</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              <%= for env <- @env_vars do %>
+                <tr>
+                  <td class="font-mono text-sm">{env["key"]}</td>
+                  <td class="font-mono text-sm max-w-xs truncate">
+                    <%= if env["type"] == "SECRET" do %>
+                      <span class="text-base-content/40">••••••••</span>
+                    <% else %>
+                      {env["value"]}
+                    <% end %>
+                  </td>
+                  <td><span class="badge badge-ghost badge-sm">{env["type"]}</span></td>
+                  <td>
+                    <button
+                      type="button"
+                      class="btn btn-ghost btn-xs text-error"
+                      phx-click="remove_env_var"
+                      phx-value-key={env["key"]}
+                    >
+                      <.icon name="hero-trash" class="h-3 w-3" />
+                    </button>
+                  </td>
+                </tr>
+              <% end %>
+            </tbody>
+          </table>
+        </div>
+      <% end %>
+
+      <div class="bg-base-200 p-4 rounded-lg">
+        <h3 class="font-medium mb-3">Add Environment Variable</h3>
+        <form phx-change="update_new_env" phx-submit="add_env_var" class="flex flex-wrap gap-3 items-end">
+          <div class="form-control">
+            <label class="label">
+              <span class="label-text">Key</span>
+            </label>
+            <input
+              type="text"
+              name="key"
+              value={@new_env_key}
+              class="input input-bordered input-sm w-48"
+              placeholder="MY_ENV_VAR"
+            />
+          </div>
+          <div class="form-control">
+            <label class="label">
+              <span class="label-text">Value</span>
+            </label>
+            <input
+              type="text"
+              name="value"
+              value={@new_env_value}
+              class="input input-bordered input-sm w-64"
+              placeholder="value"
+            />
+          </div>
+          <div class="form-control">
+            <label class="label">
+              <span class="label-text">Type</span>
+            </label>
+            <select name="type" class="select select-bordered select-sm">
+              <option value="GENERAL" selected={@new_env_type == "GENERAL"}>General</option>
+              <option value="SECRET" selected={@new_env_type == "SECRET"}>Secret</option>
+            </select>
+          </div>
+          <button type="submit" class="btn btn-primary btn-sm">
+            <.icon name="hero-plus" class="h-4 w-4" /> Add
+          </button>
+        </form>
+      </div>
+    </div>
+    """
+  end
+
   defp step_review(assigns) do
     selected_db =
       if assigns.selected_database do
@@ -808,6 +956,20 @@ defmodule KarotteControlWeb.DigitalOcean.AppNewLive do
                   {@selected_db["name"]} ({@selected_db["engine"]})
                 <% else %>
                   <span class="text-base-content/60">None</span>
+                <% end %>
+              </td>
+            </tr>
+            <tr>
+              <th>Environment Variables</th>
+              <td>
+                <%= if @env_vars != [] do %>
+                  <div class="flex flex-wrap gap-1">
+                    <%= for env <- @env_vars do %>
+                      <span class="badge badge-ghost badge-sm font-mono">{env["key"]}</span>
+                    <% end %>
+                  </div>
+                <% else %>
+                  <span class="text-base-content/60">None (only auto-generated)</span>
                 <% end %>
               </td>
             </tr>

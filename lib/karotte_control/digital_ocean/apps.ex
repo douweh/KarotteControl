@@ -59,4 +59,14 @@ defmodule KarotteControl.DigitalOcean.Apps do
       error -> error
     end
   end
+
+  @doc """
+  Updates an app's spec.
+  """
+  def update(app_id, spec) do
+    case Client.put("/apps/#{app_id}", %{"spec" => spec}) do
+      {:ok, %{"app" => app}} -> {:ok, app}
+      error -> error
+    end
+  end
 end
