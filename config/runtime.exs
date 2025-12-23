@@ -1,9 +1,11 @@
 import Config
 import Dotenvy
 
-# Load .env file in dev/test environments
+# Load .env file in dev/test environments, system env in prod
 if config_env() in [:dev, :test] do
   source!([".env", ".env.#{config_env()}", ".env.#{config_env()}.local", System.get_env()])
+else
+  source!([System.get_env()])
 end
 
 # DigitalOcean API configuration
