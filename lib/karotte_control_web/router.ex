@@ -18,7 +18,7 @@ defmodule KarotteControlWeb.Router do
   end
 
   scope "/", KarotteControlWeb do
-    pipe_through :browser
+    pipe_through [:browser, :fetch_projects]
 
     get "/", PageController, :home
   end
