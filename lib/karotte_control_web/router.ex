@@ -72,6 +72,9 @@ defmodule KarotteControlWeb.Router do
     live "/digitalocean/databases/:id", DigitalOcean.DatabaseShowLive, :show
     live "/digitalocean/registry", DigitalOcean.RegistryLive, :index
     live "/digitalocean/registry/:registry_name/:repository_name", DigitalOcean.RepositoryShowLive, :show
+
+    # Dokku routes
+    live "/digitalocean/dokku/:droplet_id/apps/:app_name", DigitalOcean.DokkuAppShowLive, :show
   end
 
   scope "/", KarotteControlWeb do
