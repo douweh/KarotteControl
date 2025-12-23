@@ -383,7 +383,16 @@ defmodule KarotteControlWeb.DigitalOcean.ProjectShowLive do
           <% @droplet["dokku_apps"] == :error -> %>
             <div class="alert alert-error">
               <.icon name="hero-exclamation-circle" class="h-5 w-5" />
-              <span>Failed to load Dokku apps. Check SSH credentials.</span>
+              <div class="flex-1">
+                <span>Failed to load Dokku apps. Check SSH credentials.</span>
+              </div>
+              <button
+                class="btn btn-sm btn-ghost"
+                phx-click="open_ssh_modal"
+                phx-value-droplet-id={@droplet["id"]}
+              >
+                <.icon name="hero-key" class="h-4 w-4" /> Reconfigure
+              </button>
             </div>
           <% is_list(@droplet["dokku_apps"]) and @droplet["dokku_apps"] == [] -> %>
             <p class="text-base-content/60">No Dokku apps on this droplet</p>
