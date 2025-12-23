@@ -158,6 +158,122 @@ defmodule KarotteControl.Dokku.SSH do
     run_dokku_command(droplet_id, "config:unset #{app_name} #{key}")
   end
 
+  @doc """
+  Sets multiple environment variables for an app at once.
+  env_vars should be a map of %{key => value}
+  """
+  def set_env_vars(droplet_id, app_name, env_vars) when is_map(env_vars) do
+    if map_size(env_vars) == 0 do
+      {:ok, ""}
+    else
+      env_string =
+        env_vars
+        |> Enum.map(fn {key, value} ->
+          escaped_value = String.replace(value, "'", "'\\''")
+          "#{key}='#{escaped_value}'"
+        end)
+        |> Enum.join(" ")
+
+      run_dokku_command(droplet_id, "config:set --no-restart #{app_name} #{env_string}")
+    end
+  end
+
+  @doc """
+  Creates a new Dokku app.
+  """
+  def create_app(droplet_id, app_name) do
+    run_dokku_command(droplet_id, "apps:create #{app_name}")
+  end
+
+  @doc """
+  Destroys a Dokku app.
+  """
+  def destroy_app(droplet_id, app_name) do
+    run_dokku_command(droplet_id, "apps:destroy #{app_name} --force")
+  end
+
+  @doc """
+  Lists available Postgres databases.
+  """
+  def list_postgres_databases(droplet_id) do
+    case run_dokku_command(droplet_id, "postgres:list") do
+      {:ok, output} ->
+        databases =
+          output
+          |> String.split("\n", trim: true)
+          |> Enum.map(&String.trim/1)
+          |> Enum.reject(&skip_line?/1)
+          |> Enum.filter(&valid_app_name?/1)
+
+        {:ok, databases}
+
+      error ->
+        error
+    end
+  end
+
+  @doc """
+  Links a Postgres database to an app.
+  """
+  def link_postgres(droplet_id, app_name, database_name) do
+    run_dokku_command(droplet_id, "postgres:link #{database_name} #{app_name}")
+  end
+
+  @doc """
+  Deploys an app from a Docker image.
+  """
+  def deploy_from_image(droplet_id, app_name, image_url) do
+    run_dokku_command(droplet_id, "git:from-image #{app_name} #{image_url}")
+  end
+
+  @doc """
+  Sets the port mapping for an app.
+  """
+  def set_port(droplet_id, app_name, host_port, container_port) do
+    run_dokku_command(droplet_id, "ports:set #{app_name} http:#{host_port}:#{container_port}")
+  end
+
+  @doc """
+  Sets a domain for an app.
+  """
+  def add_domain(droplet_id, app_name, domain) do
+    run_dokku_command(droplet_id, "domains:add #{app_name} #{domain}")
+  end
+
+  @doc """
+  Enables Let's Encrypt SSL for an app.
+  """
+  def enable_letsencrypt(droplet_id, app_name) do
+    run_dokku_command(droplet_id, "letsencrypt:enable #{app_name}")
+  end
+
+  @doc """
+  Checks if the postgres plugin is installed.
+  """
+  def postgres_plugin_installed?(droplet_id) do
+    case run_dokku_command(droplet_id, "plugin:list") do
+      {:ok, output} -> String.contains?(output, "postgres")
+      _ -> false
+    end
+  end
+
+  @doc """
+  Logs into a Docker registry using docker login.
+  """
+  def docker_login(droplet_id, registry, username, password) do
+    escaped_password = String.replace(password, "'", "'\\''")
+    run_command(droplet_id, "echo '#{escaped_password}' | docker login #{registry} -u #{username} --password-stdin")
+  end
+
+  @doc """
+  Logs into a Docker registry using Dokku's registry:login command.
+  For DigitalOcean, both username and password should be the API token.
+  """
+  def registry_login(droplet_id, registry, username, password) do
+    escaped_password = String.replace(password, "'", "'\\''")
+    run_dokku_command(droplet_id, "registry:login #{registry} #{username} '#{escaped_password}'")
+  end
+
   # Private functions
 
   defp run_dokku_command(droplet_id, command) do

@@ -63,6 +63,37 @@ defmodule KarotteControl.DigitalOcean.Registry do
   end
 
   @doc """
+  Gets Docker credentials for authenticating with the registry.
+  Returns the credentials needed for `docker login`.
+  """
+  def get_docker_credentials do
+    case Client.get("/registry/docker-credentials?read_write=true") do
+      {:ok, %{"auths" => auths}} ->
+        # The response contains auth info for registry.digitalocean.com
+        case Map.get(auths, "registry.digitalocean.com") do
+          %{"auth" => auth_token} ->
+            # The auth token is base64 encoded "username:password"
+            case Base.decode64(auth_token) do
+              {:ok, decoded} ->
+                case String.split(decoded, ":", parts: 2) do
+                  [username, password] -> {:ok, %{username: username, password: password}}
+                  _ -> {:error, :invalid_credentials}
+                end
+
+              :error ->
+                {:error, :invalid_credentials}
+            end
+
+          _ ->
+            {:error, :no_credentials}
+        end
+
+      error ->
+        error
+    end
+  end
+
+  @doc """
   Deletes tags older than 1 week, but only if the repository has more than 8 tags.
   Keeps the 8 most recent tags regardless of age.
 

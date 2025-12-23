@@ -106,6 +106,49 @@ defmodule KarotteControl.DigitalOcean.Databases do
   end
 
   @doc """
+  Builds a DATABASE_URL for a specific database and user.
+  The user must already exist and have the password retrieved.
+  """
+  def build_database_url(cluster, db_name, username, password) do
+    connection = cluster["connection"]
+    host = connection["host"]
+    port = connection["port"]
+
+    "postgresql://#{username}:#{URI.encode_www_form(password)}@#{host}:#{port}/#{db_name}?sslmode=require"
+  end
+
+  @doc """
+  Gets a user from a database cluster.
+  """
+  def get_user(cluster_id, username) do
+    case Client.get("/databases/#{cluster_id}/users/#{username}") do
+      {:ok, %{"user" => user}} -> {:ok, user}
+      error -> error
+    end
+  end
+
+  @doc """
+  Adds a droplet to the trusted sources of a database cluster.
+  Returns the updated list of rules.
+  """
+  def add_droplet_to_trusted_sources(cluster_id, droplet_id) do
+    with {:ok, existing_rules} <- list_firewall_rules(cluster_id) do
+      # Check if droplet is already trusted
+      droplet_already_trusted =
+        Enum.any?(existing_rules, fn rule ->
+          rule["type"] == "droplet" && rule["value"] == to_string(droplet_id)
+        end)
+
+      if droplet_already_trusted do
+        {:ok, existing_rules}
+      else
+        new_rules = existing_rules ++ [%{"type" => "droplet", "value" => to_string(droplet_id)}]
+        update_firewall_rules(cluster_id, new_rules)
+      end
+    end
+  end
+
+  @doc """
   Grants full privileges on a database to a user.
   Connects as doadmin and grants all privileges needed for the app to work.
   """

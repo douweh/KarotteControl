@@ -366,13 +366,21 @@ defmodule KarotteControlWeb.DigitalOcean.ProjectShowLive do
               <.icon name="hero-key" class="h-4 w-4" /> Add SSH Key
             </button>
           <% else %>
-            <button
-              class="btn btn-ghost btn-sm"
-              phx-click="refresh_dokku_apps"
-              phx-value-droplet-id={@droplet["id"]}
-            >
-              <.icon name="hero-arrow-path" class="h-4 w-4" />
-            </button>
+            <div class="flex gap-2">
+              <.link
+                navigate={~p"/digitalocean/dokku/#{@droplet["id"]}/apps/new"}
+                class="btn btn-primary btn-sm"
+              >
+                <.icon name="hero-plus" class="h-4 w-4" /> Create App
+              </.link>
+              <button
+                class="btn btn-ghost btn-sm"
+                phx-click="refresh_dokku_apps"
+                phx-value-droplet-id={@droplet["id"]}
+              >
+                <.icon name="hero-arrow-path" class="h-4 w-4" />
+              </button>
+            </div>
           <% end %>
         </div>
 

@@ -50,4 +50,12 @@ defmodule KarotteControl.DigitalOcean.Client do
     Application.get_env(:karotte_control, :digitalocean_api_token) ||
       raise "DigitalOcean API token not configured. Set DIGITALOCEAN_API_TOKEN in your .env file."
   end
+
+  @doc """
+  Returns the DigitalOcean API token.
+  Used for authenticating with the container registry.
+  """
+  def get_api_token do
+    api_token()
+  end
 end
