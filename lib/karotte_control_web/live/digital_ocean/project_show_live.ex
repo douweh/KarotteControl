@@ -74,7 +74,7 @@ defmodule KarotteControlWeb.DigitalOcean.ProjectShowLive do
         if to_string(droplet["id"]) == to_string(droplet_id) do
           case SSH.list_apps(droplet_id) do
             {:ok, apps} -> Map.put(droplet, "dokku_apps", apps)
-            {:error, _} -> Map.put(droplet, "dokku_apps", :error)
+            {:error, reason} -> Map.put(droplet, "dokku_apps", {:error, reason})
           end
         else
           droplet
@@ -335,13 +335,17 @@ defmodule KarotteControlWeb.DigitalOcean.ProjectShowLive do
   end
 
   defp dokku_droplet_card(assigns) do
-    app_count =
+    {app_count, error_message} =
       case assigns.droplet["dokku_apps"] do
-        apps when is_list(apps) -> length(apps)
-        _ -> 0
+        apps when is_list(apps) -> {length(apps), nil}
+        {:error, reason} -> {0, format_ssh_error(reason)}
+        _ -> {0, nil}
       end
 
-    assigns = assign(assigns, :app_count, app_count)
+    assigns =
+      assigns
+      |> assign(:app_count, app_count)
+      |> assign(:error_message, error_message)
 
     ~H"""
     <div class="card bg-base-100 shadow-md">
@@ -380,11 +384,12 @@ defmodule KarotteControlWeb.DigitalOcean.ProjectShowLive do
             <div class="flex justify-center py-4">
               <span class="loading loading-spinner loading-md"></span>
             </div>
-          <% @droplet["dokku_apps"] == :error -> %>
+          <% @error_message -> %>
             <div class="alert alert-error">
               <.icon name="hero-exclamation-circle" class="h-5 w-5" />
               <div class="flex-1">
-                <span>Failed to load Dokku apps. Check SSH credentials.</span>
+                <div class="font-medium">Failed to load Dokku apps</div>
+                <div class="text-sm opacity-80 font-mono whitespace-pre-wrap">{@error_message}</div>
               </div>
               <button
                 class="btn btn-sm btn-ghost"
@@ -580,6 +585,16 @@ defmodule KarotteControlWeb.DigitalOcean.ProjectShowLive do
       _ -> "unknown"
     end
   end
+
+  defp format_ssh_error(reason) when is_binary(reason) do
+    reason
+    |> String.trim()
+    |> String.slice(0, 500)
+  end
+
+  defp format_ssh_error(:no_credentials), do: "No SSH credentials configured"
+  defp format_ssh_error(:no_public_ip), do: "Droplet has no public IP address"
+  defp format_ssh_error(reason), do: inspect(reason)
 
   @impl true
   def handle_event("refresh", _params, socket) do
