@@ -42,3 +42,7 @@ jobs:
       uses: docker/build-push-action@v5
       with:
         context: .
+        push: true
+        tags: |
+          ${{ env.REGISTRY }}/${{ env.REPOSITORY }}:${{ env.ENVIRONMENT }}-${{ env.SHORT_SHA }}
+          ${{ env.REGISTRY }}/${{ env.REPOSITORY }}:${{ env.ENVIRONMENT }}-latest
