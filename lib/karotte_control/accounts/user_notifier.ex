@@ -9,7 +9,7 @@ defmodule KarotteControl.Accounts.UserNotifier do
     email =
       new()
       |> to(recipient)
-      |> from({"KarotteControl", "contact@example.com"})
+      |> from({"KarotteControl", "control@karotte.be"})
       |> subject(subject)
       |> text_body(body)
 
