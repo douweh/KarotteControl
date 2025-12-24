@@ -2,7 +2,7 @@ defmodule KarotteControlWeb.DigitalOcean.DokkuAppNewLive do
   use KarotteControlWeb, :live_view
 
   alias KarotteControl.DigitalOcean.{Client, Registry, Droplets, Databases}
-  alias KarotteControl.Dokku.SSH
+  alias KarotteControl.Dokku.{Deployments, SSH}
 
   @impl true
   def mount(%{"droplet_id" => droplet_id}, _session, socket) do
@@ -25,6 +25,7 @@ defmodule KarotteControlWeb.DigitalOcean.DokkuAppNewLive do
       |> assign(:selected_repo, nil)
       |> assign(:tags, [])
       |> assign(:selected_tag, nil)
+      |> assign(:auto_deploy, true)
       # Step 3: Database
       |> assign(:database_type, "none")
       |> assign(:managed_databases, [])
@@ -340,6 +341,20 @@ defmodule KarotteControlWeb.DigitalOcean.DokkuAppNewLive do
 
     case SSH.deploy_from_image(socket.assigns.droplet_id, socket.assigns.app_name, image_url) do
       {:ok, output} ->
+        # Save deployment config for auto-deploy
+        {:ok, deployment} = Deployments.link_image(
+          socket.assigns.droplet_id,
+          socket.assigns.app_name,
+          registry_name,
+          socket.assigns.selected_repo,
+          tag: socket.assigns.selected_tag,
+          auto_deploy: socket.assigns.auto_deploy
+        )
+
+        # Get the current digest from tags and save it to prevent immediate re-deploy
+        digest = get_current_digest(socket.assigns.tags, socket.assigns.selected_tag)
+        if digest, do: Deployments.update_digest(deployment, digest, "success")
+
         {:noreply,
          socket
          |> assign(:creating, false)
@@ -372,6 +387,7 @@ defmodule KarotteControlWeb.DigitalOcean.DokkuAppNewLive do
             "http_port" -> assign(socket, :http_port, value)
             "database_type" -> assign(socket, :database_type, value)
             "selected_database" -> assign(socket, :selected_database, value)
+            "auto_deploy" -> assign(socket, :auto_deploy, value == "true")
             _ -> socket
           end
 
@@ -557,6 +573,7 @@ defmodule KarotteControlWeb.DigitalOcean.DokkuAppNewLive do
                     selected_repo={@selected_repo}
                     tags={@tags}
                     selected_tag={@selected_tag}
+                    auto_deploy={@auto_deploy}
                   />
                 <% 3 -> %>
                   <.step_database
@@ -586,6 +603,7 @@ defmodule KarotteControlWeb.DigitalOcean.DokkuAppNewLive do
                       registry={@registry}
                       selected_repo={@selected_repo}
                       selected_tag={@selected_tag}
+                      auto_deploy={@auto_deploy}
                       database_type={@database_type}
                       managed_databases={@managed_databases}
                       selected_database={@selected_database}
@@ -727,6 +745,25 @@ defmodule KarotteControlWeb.DigitalOcean.DokkuAppNewLive do
               <% end %>
             </div>
           <% end %>
+        </div>
+
+        <div class="form-control mt-4">
+          <label class="label cursor-pointer justify-start gap-3">
+            <input
+              type="checkbox"
+              class="checkbox checkbox-primary"
+              checked={@auto_deploy}
+              phx-click="update_field"
+              phx-value-field="auto_deploy"
+              phx-value-value={if @auto_deploy, do: "false", else: "true"}
+            />
+            <div>
+              <span class="label-text font-medium">Enable auto-deploy</span>
+              <p class="text-sm text-base-content/60">
+                Automatically deploy when a new image is pushed to this tag
+              </p>
+            </div>
+          </label>
         </div>
       <% end %>
     </div>
@@ -921,6 +958,16 @@ defmodule KarotteControlWeb.DigitalOcean.DokkuAppNewLive do
               <td class="font-mono">{@registry["name"]}/{@selected_repo}:{@selected_tag}</td>
             </tr>
             <tr>
+              <th>Auto-deploy</th>
+              <td>
+                <%= if @auto_deploy do %>
+                  <span class="badge badge-success">Enabled</span>
+                <% else %>
+                  <span class="badge badge-ghost">Disabled</span>
+                <% end %>
+              </td>
+            </tr>
+            <tr>
               <th>HTTP Port</th>
               <td>{@http_port}</td>
             </tr>
@@ -1012,5 +1059,13 @@ defmodule KarotteControlWeb.DigitalOcean.DokkuAppNewLive do
       </div>
     </div>
     """
+  end
+
+  # Get the digest for a specific tag from the tags list
+  defp get_current_digest(tags, selected_tag) do
+    case Enum.find(tags, &(&1["tag"] == selected_tag)) do
+      nil -> nil
+      tag -> tag["manifest_digest"]
+    end
   end
 end

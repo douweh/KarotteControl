@@ -244,6 +244,24 @@ defmodule KarotteControl.Dokku.SSH do
   end
 
   @doc """
+  Deploys an app from a Docker image with streaming output.
+  Sends {:ssh_output, chunk} messages to the caller as output arrives.
+  Returns {:ok, full_output} or {:error, reason} when complete.
+  """
+  def deploy_from_image_stream(droplet_id, app_name, image_url, caller_pid) do
+    run_dokku_command_stream(droplet_id, "git:from-image #{app_name} #{image_url}", caller_pid)
+  end
+
+  @doc """
+  Runs a command inside the app's container.
+  Useful for running migrations, seeds, or other one-off commands.
+  Example: run_command(droplet_id, "myapp", "./bin/migrate")
+  """
+  def run_command(droplet_id, app_name, command) do
+    run_dokku_command(droplet_id, "run #{app_name} #{command}")
+  end
+
+  @doc """
   Sets the port mapping for an app.
   """
   def set_port(droplet_id, app_name, host_port, container_port) do
@@ -251,10 +269,43 @@ defmodule KarotteControl.Dokku.SSH do
   end
 
   @doc """
+  Lists domains for an app.
+  Returns {:ok, [domain_strings]} or {:error, reason}
+  """
+  def list_domains(droplet_id, app_name) do
+    case run_dokku_command(droplet_id, "domains #{app_name}") do
+      {:ok, output} ->
+        domains =
+          output
+          |> String.split("\n", trim: true)
+          |> Enum.map(&String.trim/1)
+          |> Enum.reject(&skip_line?/1)
+          |> Enum.filter(&valid_domain?/1)
+
+        {:ok, domains}
+
+      error ->
+        error
+    end
+  end
+
+  # Validate that a line looks like a domain
+  defp valid_domain?(line) do
+    String.contains?(line, ".") and not String.contains?(line, " ")
+  end
+
+  @doc """
   Sets a domain for an app.
   """
   def add_domain(droplet_id, app_name, domain) do
     run_dokku_command(droplet_id, "domains:add #{app_name} #{domain}")
+  end
+
+  @doc """
+  Removes a domain from an app.
+  """
+  def remove_domain(droplet_id, app_name, domain) do
+    run_dokku_command(droplet_id, "domains:remove #{app_name} #{domain}")
   end
 
   @doc """

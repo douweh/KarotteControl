@@ -12,6 +12,8 @@ defmodule KarotteControl.Application do
       KarotteControl.Repo,
       {DNSCluster, query: Application.get_env(:karotte_control, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: KarotteControl.PubSub},
+      # Image poller for auto-deploying Dokku apps
+      KarotteControl.Dokku.ImagePoller,
       # Start to serve requests, typically the last entry
       KarotteControlWeb.Endpoint
     ]
