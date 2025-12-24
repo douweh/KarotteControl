@@ -1,6 +1,8 @@
 defmodule KarotteControl.Dokku.SSH do
   @moduledoc """
   SSH client for executing Dokku commands on remote droplets.
+
+  Uses SSH ControlMaster for connection multiplexing to reuse connections.
   """
 
   alias KarotteControl.Dokku.{Credentials, SSHCredential}
@@ -99,6 +101,15 @@ defmodule KarotteControl.Dokku.SSH do
   end
 
   @doc """
+  Restarts a Dokku app with streaming output.
+  Sends {:ssh_output, chunk} messages to the caller as output arrives.
+  Returns {:ok, full_output} or {:error, reason} when complete.
+  """
+  def restart_app_stream(droplet_id, app_name, caller_pid) do
+    run_dokku_command_stream(droplet_id, "ps:restart #{app_name}", caller_pid)
+  end
+
+  @doc """
   Stops a Dokku app.
   """
   def stop_app(droplet_id, app_name) do
@@ -116,17 +127,17 @@ defmodule KarotteControl.Dokku.SSH do
   Gets app environment variables.
   """
   def get_env(droplet_id, app_name) do
-    case run_dokku_command(droplet_id, "config:export #{app_name}") do
+    case run_dokku_command(droplet_id, "config:show #{app_name}") do
       {:ok, output} ->
         envs =
           output
           |> String.split("\n", trim: true)
+          |> Enum.map(&String.trim/1)
+          |> Enum.reject(&skip_line?/1)
           |> Enum.map(fn line ->
-            case String.split(line, "=", parts: 2) do
+            case String.split(line, ":", parts: 2) do
               [key, value] ->
-                # Remove surrounding quotes if present
-                value = value |> String.trim("'") |> String.trim("\"")
-                {key, value}
+                {String.trim(key), String.trim(value)}
 
               _ ->
                 nil
@@ -144,18 +155,24 @@ defmodule KarotteControl.Dokku.SSH do
 
   @doc """
   Sets an environment variable for an app.
+  Uses --no-restart by default to avoid long waits. Call restart_app separately if needed.
   """
-  def set_env(droplet_id, app_name, key, value) do
+  def set_env(droplet_id, app_name, key, value, opts \\ []) do
+    restart = Keyword.get(opts, :restart, false)
+    restart_flag = if restart, do: "", else: "--no-restart "
     # Escape the value for shell
     escaped_value = String.replace(value, "'", "'\\''")
-    run_dokku_command(droplet_id, "config:set #{app_name} #{key}='#{escaped_value}'")
+    run_dokku_command(droplet_id, "config:set #{restart_flag}#{app_name} #{key}='#{escaped_value}'")
   end
 
   @doc """
   Unsets an environment variable for an app.
+  Uses --no-restart by default to avoid long waits. Call restart_app separately if needed.
   """
-  def unset_env(droplet_id, app_name, key) do
-    run_dokku_command(droplet_id, "config:unset #{app_name} #{key}")
+  def unset_env(droplet_id, app_name, key, opts \\ []) do
+    restart = Keyword.get(opts, :restart, false)
+    restart_flag = if restart, do: "", else: "--no-restart "
+    run_dokku_command(droplet_id, "config:unset #{restart_flag}#{app_name} #{key}")
   end
 
   @doc """
@@ -301,35 +318,63 @@ defmodule KarotteControl.Dokku.SSH do
   end
 
   defp execute_ssh(ip, %SSHCredential{} = credential, command) do
-    # Write the private key to a temporary file
-    key_path = Path.join(System.tmp_dir!(), "dokku_key_#{:erlang.unique_integer([:positive])}")
+    # Use a persistent key file per droplet to enable ControlMaster connection reuse
+    key_path = get_or_create_key_file(ip, credential)
+    control_path = control_socket_path(ip, credential.ssh_port)
 
-    try do
+    args = [
+      "-i",
+      key_path,
+      "-o",
+      "StrictHostKeyChecking=no",
+      "-o",
+      "UserKnownHostsFile=/dev/null",
+      "-o",
+      "ConnectTimeout=10",
+      # ControlMaster settings for connection reuse
+      "-o",
+      "ControlMaster=auto",
+      "-o",
+      "ControlPath=#{control_path}",
+      "-o",
+      "ControlPersist=300",
+      "-p",
+      to_string(credential.ssh_port),
+      "#{credential.ssh_user}@#{ip}",
+      command
+    ]
+
+    case System.cmd("ssh", args, stderr_to_stdout: true) do
+      {output, 0} -> {:ok, output}
+      {output, _code} -> {:error, output}
+    end
+  end
+
+  # Get or create a persistent key file for SSH connection reuse
+  defp get_or_create_key_file(ip, credential) do
+    key_dir = Path.join(System.tmp_dir!(), "karotte_ssh_keys")
+    File.mkdir_p!(key_dir)
+
+    # Use a hash of ip+port as filename to avoid special characters
+    key_id = :crypto.hash(:md5, "#{ip}:#{credential.ssh_port}") |> Base.encode16(case: :lower)
+    key_path = Path.join(key_dir, "key_#{key_id}")
+
+    # Only write if file doesn't exist or content changed
+    unless File.exists?(key_path) and File.read!(key_path) == credential.ssh_private_key do
       File.write!(key_path, credential.ssh_private_key)
       File.chmod!(key_path, 0o600)
-
-      args = [
-        "-i",
-        key_path,
-        "-o",
-        "StrictHostKeyChecking=no",
-        "-o",
-        "UserKnownHostsFile=/dev/null",
-        "-o",
-        "ConnectTimeout=10",
-        "-p",
-        to_string(credential.ssh_port),
-        "#{credential.ssh_user}@#{ip}",
-        command
-      ]
-
-      case System.cmd("ssh", args, stderr_to_stdout: true) do
-        {output, 0} -> {:ok, output}
-        {output, _code} -> {:error, output}
-      end
-    after
-      File.rm(key_path)
     end
+
+    key_path
+  end
+
+  defp control_socket_path(ip, port) do
+    # Use /tmp directly with short names to avoid Unix socket path length limit (~104 chars)
+    socket_dir = "/tmp/kssh"
+    File.mkdir_p!(socket_dir)
+    # Use short hash to keep path under limit
+    hash = :crypto.hash(:md5, "#{ip}:#{port}") |> Base.encode16(case: :lower) |> binary_part(0, 8)
+    Path.join(socket_dir, hash)
   end
 
   defp parse_report(output) do
@@ -343,5 +388,72 @@ defmodule KarotteControl.Dokku.SSH do
     end)
     |> Enum.reject(&is_nil/1)
     |> Map.new()
+  end
+
+  # Streaming command execution
+
+  defp run_dokku_command_stream(droplet_id, command, caller_pid) do
+    run_command_stream(droplet_id, "dokku #{command}", caller_pid)
+  end
+
+  defp run_command_stream(droplet_id, command, caller_pid) do
+    with {:ok, credential} <- get_credential(droplet_id),
+         {:ok, ip} <- get_droplet_ip(droplet_id) do
+      execute_ssh_stream(ip, credential, command, caller_pid)
+    end
+  end
+
+  defp execute_ssh_stream(ip, %SSHCredential{} = credential, command, caller_pid) do
+    key_path = get_or_create_key_file(ip, credential)
+    control_path = control_socket_path(ip, credential.ssh_port)
+
+    args = [
+      "-i",
+      key_path,
+      "-o",
+      "StrictHostKeyChecking=no",
+      "-o",
+      "UserKnownHostsFile=/dev/null",
+      "-o",
+      "ConnectTimeout=10",
+      "-o",
+      "ControlMaster=auto",
+      "-o",
+      "ControlPath=#{control_path}",
+      "-o",
+      "ControlPersist=300",
+      "-p",
+      to_string(credential.ssh_port),
+      "#{credential.ssh_user}@#{ip}",
+      command
+    ]
+
+    port = Port.open({:spawn_executable, System.find_executable("ssh")}, [
+      :binary,
+      :exit_status,
+      :stderr_to_stdout,
+      args: args
+    ])
+
+    collect_port_output(port, caller_pid, [])
+  end
+
+  defp collect_port_output(port, caller_pid, acc) do
+    receive do
+      {^port, {:data, data}} ->
+        # Send chunk to caller for live updates
+        send(caller_pid, {:ssh_output, data})
+        collect_port_output(port, caller_pid, [data | acc])
+
+      {^port, {:exit_status, 0}} ->
+        {:ok, acc |> Enum.reverse() |> Enum.join()}
+
+      {^port, {:exit_status, _code}} ->
+        {:error, acc |> Enum.reverse() |> Enum.join()}
+    after
+      120_000 ->
+        Port.close(port)
+        {:error, "SSH command timed out"}
+    end
   end
 end

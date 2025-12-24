@@ -12,8 +12,6 @@ defmodule KarotteControl.Application do
       KarotteControl.Repo,
       {DNSCluster, query: Application.get_env(:karotte_control, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: KarotteControl.PubSub},
-      # Start a worker by calling: KarotteControl.Worker.start_link(arg)
-      # {KarotteControl.Worker, arg},
       # Start to serve requests, typically the last entry
       KarotteControlWeb.Endpoint
     ]
